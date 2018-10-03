@@ -43,6 +43,12 @@ Adafruit_BME280 bme(I2C_SDA, I2C_SCL);
 float temp_val = 0;
 float humidity_val = 0;
 float pressure_val = 0;
+float temp_acc = 0;
+float humidity_acc = 0;
+float pressure_acc = 0;
+float temp_av = 0;
+float humidity_av = 0;
+float pressure_av = 0;
 int humidity_setpoint = 60;
 int dehumidifier_status = 1;
 
@@ -60,9 +66,8 @@ void dehumidifier_callback(uint32_t value)
   Serial.print(F("Got Dehumidifier: "));
   Serial.println((char *)dehumidifier.lastread);
   dehumidifier_status = atoi((char *)dehumidifier.lastread);
-  if(humidity_val>humidity_setpoint && dehumidifier_status == 1)digitalWrite(RELAYPIN, HIGH);    // set relay high
+  if(humidity_av>humidity_setpoint && dehumidifier_status == 1)digitalWrite(RELAYPIN, HIGH);// set relay high
   else digitalWrite(RELAYPIN, LOW);
-
 }
 
 void humidityControl_callback(uint32_t value)
@@ -70,6 +75,31 @@ void humidityControl_callback(uint32_t value)
   Serial.print(F("Got HumidityControl: "));
   Serial.println((char *)humidityControl.lastread);
   humidity_setpoint = atoi((char *)humidityControl.lastread);
+  if(humidity_av>humidity_setpoint && dehumidifier_status == 1)digitalWrite(RELAYPIN, HIGH);// set relay high
+  else digitalWrite(RELAYPIN, LOW);}
+
+void readSensor(){
+  float humidity_new = bme.readHumidity();
+  if(!isnan(humidity_new))humidity_val = humidity_new;
+
+  float temp_new = bme.readTemperature();
+  if(!isnan(temp_new))temp_val = temp_new;
+
+  float pressure_new = bme.readPressure();
+  if(!isnan(pressure_new)){
+    pressure_val = pressure_new;
+    pressure_val = bme.seaLevelForAltitude(ALTITUDE,pressure_val);
+    pressure_val = pressure_val/100.0F;
+  }
+
+  Serial.print("Reading BME280 OK: ");
+  Serial.print(temp_val); Serial.print(" *C, "); 
+  Serial.print(humidity_val); Serial.print(" H ");
+  Serial.print(pressure_val); Serial.println(" hPa");
+
+  temp_acc+=temp_val;
+  pressure_acc+=pressure_val;
+  humidity_acc+=humidity_val;
 }
 
 void setup()
@@ -89,7 +119,7 @@ void setup()
     Serial.print("Connecting Wifi...");
     while(wifiMulti.run() != WL_CONNECTED) {
       Serial.print(".");
-      delay(3000);
+      delay(4000);
     }
     if(wifiMulti.run() == WL_CONNECTED){
       Serial.println("");
@@ -106,6 +136,18 @@ void setup()
     mqtt.subscribe(&humidityControl);
     mqtt.subscribe(&dehumidifier);
 
+    readSensor();
+
+    temp_av=temp_val;
+    pressure_av=pressure_val;
+    humidity_av=humidity_val;
+
+    if(humidity_av>humidity_setpoint && dehumidifier_status == 1)digitalWrite(RELAYPIN, HIGH);// set relay high
+    else digitalWrite(RELAYPIN, LOW);
+    
+    temp_acc=0;
+    pressure_acc=0;
+    humidity_acc=0;
 }
 
 void loop()
@@ -116,36 +158,36 @@ void loop()
   // connection and automatically reconnect when disconnected).
   MQTT_connect();
 
-  float humidity_new = bme.readHumidity();
-  if(!isnan(humidity_new))humidity_val = humidity_new;
-  
-  float temp_new = bme.readTemperature();
-  if(!isnan(temp_new))temp_val = temp_new;
+  readSensor();
+  mqtt.processPackets(5000);
+  readSensor();
+  mqtt.processPackets(5000);
+  readSensor();
+  mqtt.processPackets(5000);
+  readSensor();
+  mqtt.processPackets(5000);
 
-  float pressure_new = bme.readPressure();
-  if(!isnan(pressure_new)){
-    pressure_val = pressure_new;
-    pressure_val = bme.seaLevelForAltitude(ALTITUDE,pressure_val);
-    pressure_val = pressure_val/100.0F;
-  }
+  temp_av = temp_acc/4;
+  humidity_av = humidity_acc/4;
+  pressure_av = pressure_acc/4;
 
-  Serial.print("Reading BME280 OK: ");
-  Serial.print(temp_val); Serial.print(" *C, "); 
-  Serial.print(humidity_val); Serial.print(" H ");
-  Serial.print(pressure_val); Serial.println(" hPa");
+  temp_acc=0;
+  pressure_acc=0;
+  humidity_acc=0;
 
-  if(humidity_val>humidity_setpoint && dehumidifier_status == 1)digitalWrite(RELAYPIN, HIGH);    // set relay high
+  if(humidity_av>humidity_setpoint && dehumidifier_status == 1)digitalWrite(RELAYPIN, HIGH);    // set relay high
   else digitalWrite(RELAYPIN, LOW);
   
-  if (temp.publish(temp_val) && humidity.publish(humidity_val) && pressure.publish(pressure_val)){
+  boolean temp_ok = temp.publish(temp_av);
+  boolean humidity_ok = humidity.publish(humidity_av);
+  boolean pressure_ok = pressure.publish(pressure_av);
+  
+  if (temp_ok && humidity_ok && pressure_ok){
     Serial.println("Success publishing temp & humidity data!");
   }
   else{
     Serial.println("Failed publishing temp & humidity data!");
   }
-
-  Serial.println("Waiting for subscriptions..");
-  mqtt.processPackets(15000);
 }
 
 // Function to connect and reconnect as necessary to the MQTT server.
